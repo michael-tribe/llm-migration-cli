@@ -1,0 +1,148 @@
+repos:
+  # simple checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.0.1
+    hooks:
+      - id: check-added-large-files
+        name: Check for large files
+        stages: [commit]
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+        stages: [commit]
+      - id: check-executables-have-shebangs
+        name: Check executables have shebang
+        stages: [commit]
+      - id: check-shebang-scripts-are-executable
+        name: Check scripts with shebang are executable
+        stages: [commit]
+      - id: debug-statements
+        name: Check debug statements
+        stages: [commit]
+      - id: detect-private-key
+        name: Check no private keys committed
+        stages: [commit]
+      - id: end-of-file-fixer
+        name: Check end of file consistency
+        stages: [commit]
+        exclude: ^schemas/.*$
+      - id: fix-byte-order-marker
+        name: Check byte order marker
+        stages: [commit]
+      - id: trailing-whitespace
+        name: Check trailing whitespace
+        stages: [commit]
+      - id: no-commit-to-branch
+        name: Check no commit to branch
+        stages: [commit]
+        args: [--pattern, '^(?!((ci|chore|feature|fix|refactor|test)\/[a-zA-Z0-9\-]+)$).*']
+      - id: check-json
+        name: Check .json
+        stages: [commit]
+      - id: check-yaml
+        name: Check .yaml
+        stages: [commit]
+        args: [--allow-multiple-documents]
+      - id: pretty-format-json
+        name: Format .json
+        stages: [commit]
+        args: [--autofix, --no-sort-keys]
+
+  # format yaml
+  - repo: https://github.com/jumanjihouse/pre-commit-hook-yamlfmt
+    rev: 0.2.3
+    hooks:
+      - id: yamlfmt
+        name: Format .yaml
+        stages: [commit]
+        args: [--mapping, '2', --sequence, '4', --offset, '2', --implicit_start, --preserve-quotes]
+        exclude: ^docker-compose\.yaml$|^.github/workflows/.*\.yaml$
+
+  # format shell scripts
+  - repo: https://github.com/cisagov/pre-commit-shfmt
+    rev: v0.0.2
+    hooks:
+      - id: shfmt
+        name: Format .sh
+        stages: [commit]
+        args:
+          - --indent=2
+          - --binary-next-line
+          - --case-indent
+          - --space-redirects
+
+  # lint python code
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.7
+    hooks:
+      - id: ruff
+        name: Lint .py
+        stages: [commit]
+        args: [--fix, --exit-non-zero-on-fix]
+
+  # run linters not yet included in ruff
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.1.0
+    hooks:
+      - id: flake8
+        name: Check complexity
+        stages: [commit]
+        additional_dependencies:
+          - flake8-cognitive-complexity
+          - flake8-expression-complexity
+        args:
+          - --max-cognitive-complexity=20
+          - --max-expression-complexity=7
+          - --select=CCR001,ECE001
+
+  # run type checker
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        name: Check types
+        stages: [commit]
+        additional_dependencies:
+          - pydantic
+          - types-all
+
+  # check for forbidden strings
+  - repo: local
+    hooks:
+      - id: check-forbidden-strings
+        name: Check for forbidden strings
+        stages: [commit, push]
+        entry: |
+          bash -c 'if grep -Rn --include=\*.py "# NOCOMMIT"; then exit 1; fi'
+        language: system
+        pass_filenames: false
+        types: [python]
+
+  # tests
+  - repo: local
+    hooks:
+      - id: pytest
+        name: Test .py
+        stages: [push]
+        entry: scripts/test.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+
+  # code quality and security checks
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.69.0
+    hooks:
+      - id: semgrep
+        name: Check code quality and security
+        args: [--config=auto, --skip-unknown-extensions, --error, .]
+        stages: [push]
+        exclude: ^README.md
+
+  # check commit message
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.0.0
+    hooks:
+      - id: conventional-pre-commit
+        name: Check commit message
+        stages: [commit-msg]

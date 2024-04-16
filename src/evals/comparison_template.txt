@@ -1,0 +1,33 @@
+The following prompt was given to two assistants:
+```
+${input_text}
+```
+
+The first assistant responded with:
+```
+${first_output}
+```
+
+The second assistant responded with:
+```
+${second_output}
+```
+
+Based on this context, please answer the following question:
+
+"${question}"
+
+Provide one of the following responses:
+${response_instructions}
+
+Structure your response as JSON with the following fields:
+- reasoning: a string explaining your rating
+- rating: an integer, limited to the options described above
+
+Example:
+{
+    "reasoning": "The first output is better as it follows the instructions better.",
+    "rating": 1
+}
+
+Output:

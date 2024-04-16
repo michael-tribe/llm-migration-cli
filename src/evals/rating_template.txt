@@ -1,0 +1,26 @@
+The following prompt was given to an assistant:
+```
+${input_text}
+```
+
+The assistant responded with:
+```
+${output_text}
+```
+
+Based on this context, please answer the following question:
+
+"${question}"
+
+Provide a rating between ${min_value} and ${max_value}.
+Structure your response as JSON with the following fields:
+- reasoning: a string explaining your rating
+- rating: a float between ${min_value} and ${max_value}
+
+Example:
+{
+    "reasoning": "I rated this example a 3 because it was well-written but lacked detail.",
+    "rating": 3
+}
+
+Output:
