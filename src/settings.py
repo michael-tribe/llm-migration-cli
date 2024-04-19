@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class LLMSettings(BaseSettings):
     anthropic_api_key: str | None = Field(None, alias="ANTHROPIC_API_KEY")
     openai_api_key: str | None = Field(None, alias="OPENAI_KEY")
+    max_concurrency: int = 1
     echo: bool = False
 
     model_config = SettingsConfigDict(env_file="secrets.env", extra="ignore")

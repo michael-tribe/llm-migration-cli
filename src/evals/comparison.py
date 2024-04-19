@@ -14,7 +14,7 @@ from src.dtos.result import Result
 from src.evals.base import BaseEvaluation, evals_registry
 from src.llms.base import BaseLLM
 from src.logger import root_logger
-from src.utils.asyncio import run_sync
+from src.utils.asyncio import run_async_tasks
 from src.utils.cli import create_progress_bar_panel
 
 
@@ -48,7 +48,7 @@ class RatingResponse(BaseModel):
 @evals_registry.register("comparison")
 class ComparisonEvaluation(BaseEvaluation):
     llm_evaluation_template: str | None = None
-    default_template_path: Path | None = Path(__file__).parent / "rating_template.txt"
+    default_template_path: Path | None = Path(__file__).parent / "comparison_template.txt"
 
     question: str = "Which of the outputs is better?"
     response_instructions: str = (
@@ -80,6 +80,7 @@ class ComparisonEvaluation(BaseEvaluation):
         layout = self._build_cli_layout()
 
         results = []
+        random.shuffle(pairs)
         for idx, (main_example, comparison_example) in enumerate(pairs):
             progress_bar = create_progress_bar_panel(n_done=idx, total=len(pairs), width=console.width - 20)
             first_example = random.choice([main_example, comparison_example])  # noqa: S311
@@ -127,14 +128,83 @@ class ComparisonEvaluation(BaseEvaluation):
 
         return results
 
-    def _get_rating_from_user(self, console: Console) -> RatingResponse:
-        while True:
-            rating = console.input(f"Rate the outputs (1/2/3/4): ")
-            try:
-                return RatingResponse(rating=rating)
-            except ValidationError as e:
-                log.error(f"Invalid input: {e}")
-                console.print("Invalid input, please try again.")
+    def _evaluate_examples_by_llm(self, examples: list[Example], llm: BaseLLM) -> list[Result]:
+        main_llm_name, comparison_llm_name, main_examples, comparison_examples = self._split_examples_by_llm_name(
+            examples=examples,
+        )
+
+        filtered_examples = self._filter_evaluated_examples(examples=main_examples, evaluator_name=llm.name)
+        if not filtered_examples:
+            log.info("All examples have been evaluated by human")
+            return self.load_results(prompt_name=examples[0].prompt_name, evaluator_name=llm.name)  # type: ignore
+
+        pairs = self._build_example_pairs(main_examples=filtered_examples, comparison_examples=comparison_examples)
+        if not pairs:
+            log.info("No valid pairs found for comparison evaluation")
+            return self.load_results(prompt_name=examples[0].prompt_name, evaluator_name=llm.name)  # type: ignore
+
+        log.info(f"Evaluating {len(pairs)} examples by LLM")
+        tasks = []
+        for main_example, comparison_example in pairs:
+            tasks.append(
+                self._evaluate_example_by_llm(
+                    llm=llm,
+                    main_llm_name=main_llm_name,
+                    comparison_llm_name=comparison_llm_name,
+                    main_example=main_example,
+                    comparison_example=comparison_example,
+                ),
+            )
+        return run_async_tasks(tasks)
+
+    async def _evaluate_example_by_llm(
+        self,
+        llm: BaseLLM,
+        main_llm_name: str,
+        comparison_llm_name: str,
+        main_example: Example,
+        comparison_example: Example,
+    ) -> Result:
+        log.info(f"Evaluating examples {main_example.uuid} and {comparison_example.uuid} by {llm.name}")
+        template_params: dict[str, str] = {
+            "input_text": main_example.input_text,
+            "first_output": main_example.output_text,
+            "second_output": comparison_example.output_text,
+            "question": self.question,
+            "response_instructions": self.response_instructions,
+        }
+
+        rating = await llm.generate_with_output_model(
+            template=Template(self.llm_evaluation_template),  # type: ignore
+            template_params=template_params,
+            max_output_tokens=200,
+            temperature=0.5,
+            output_model=RatingResponse,
+        )
+
+        result = Result(
+            evaluation_name=self.name,
+            evaluation_question=self.question,
+            evaluator_name=llm.name,
+            prompt_name=main_example.prompt_name,  # type: ignore
+            example_uuid=main_example.uuid,
+            llm_name=main_example.llm_name,
+            comparison_example_uuid=comparison_example.uuid,
+            comparison_llm_name=comparison_example.llm_name,
+            result=float(rating.rating.value),
+            reasoning=rating.reasoning,
+        )
+        self.log_result(result)
+
+        if rating.rating == ComparisonResponse.FIRST_BETTER:
+            log.debug(f"{llm.name} preferred the {main_llm_name} output")
+        elif rating.rating == ComparisonResponse.SECOND_BETTER:
+            log.debug(f"{llm.name} preferred the {comparison_llm_name} output")
+        elif rating.rating == ComparisonResponse.EQUALLY_GOOD:
+            log.debug(f"{llm.name} found both outputs equally good")
+        elif rating.rating == ComparisonResponse.ABSTAIN:
+            log.debug(f"{llm.name} abstained from rating the outputs")
+        return result
 
     def _build_example_pairs(
         self, main_examples: list[Example], comparison_examples: list[Example]
@@ -168,67 +238,14 @@ class ComparisonEvaluation(BaseEvaluation):
         comparison_examples = examples_by_llm_name[comparison_llm_name]
         return main_llm_name, comparison_llm_name, main_examples, comparison_examples
 
-    def _evaluate_examples_by_llm(self, examples: list[Example], llm: BaseLLM) -> list[Result]:
-        main_llm_name, comparison_llm_name, main_examples, comparison_examples = self._split_examples_by_llm_name(
-            examples=examples,
-        )
-
-        filtered_examples = self._filter_evaluated_examples(examples=main_examples, evaluator_name=llm.name)
-        if not filtered_examples:
-            log.info("All examples have been evaluated by human")
-            return self.load_results(prompt_name=examples[0].prompt_name, evaluator_name=llm.name)  # type: ignore
-
-        pairs = self._build_example_pairs(main_examples=filtered_examples, comparison_examples=comparison_examples)
-        if not pairs:
-            log.info("No valid pairs found for comparison evaluation")
-            return self.load_results(prompt_name=examples[0].prompt_name, evaluator_name=llm.name)  # type: ignore
-
-        log.info(f"Evaluating {len(pairs)} examples by LLM")
-        results = []
-        for idx, (main_example, comparison_example) in enumerate(pairs):
-            log.debug(f"Evaluating example {idx + 1}/{len(pairs)}")
-            template_params: dict[str, str] = {
-                "input_text": main_example.input_text,
-                "first_output": main_example.output_text,
-                "second_output": comparison_example.output_text,
-                "question": self.question,
-                "response_instructions": self.response_instructions,
-            }
-
-            rating: RatingResponse = run_sync(
-                llm.generate_with_output_model,
-                template=Template(self.llm_evaluation_template),  # type: ignore
-                template_params=template_params,
-                max_output_tokens=200,
-                temperature=0.5,
-                output_model=RatingResponse,
-            )
-
-            result = Result(
-                evaluation_name=self.name,
-                evaluation_question=self.question,
-                evaluator_name=llm.name,
-                prompt_name=example.prompt_name,  # type: ignore
-                example_uuid=main_example.uuid,
-                llm_name=main_example.llm_name,
-                comparison_example_uuid=comparison_example.uuid,
-                comparison_llm_name=comparison_example.llm_name,
-                result=float(rating.rating.value),
-                reasoning=rating.reasoning,
-            )
-            self.log_result(result)
-            results.append(result)
-
-            if rating.rating == ComparisonResponse.FIRST_BETTER:
-                log.debug(f"{llm.name} preferred the {main_llm_name} output")
-            elif rating.rating == ComparisonResponse.SECOND_BETTER:
-                log.debug(f"{llm.name} preferred the {comparison_llm_name} output")
-            elif rating.rating == ComparisonResponse.EQUALLY_GOOD:
-                log.debug(f"{llm.name} found both outputs equally good")
-            elif rating.rating == ComparisonResponse.ABSTAIN:
-                log.debug(f"{llm.name} abstained from rating the outputs")
-
-        return results
+    def _get_rating_from_user(self, console: Console) -> RatingResponse:
+        while True:
+            rating = console.input(f"Rate the outputs (1/2/3/4): ")
+            try:
+                return RatingResponse(rating=rating)
+            except ValidationError as e:
+                log.error(f"Invalid input: {e}")
+                console.print("Invalid input, please try again.")
 
     def _display_results(self, results: list[Result]) -> None:
         llm_results_text, evaluator_results_text = self._render_results(results=results)
@@ -260,6 +277,14 @@ class ComparisonEvaluation(BaseEvaluation):
         main_llm = results[0].llm_name
         comparison_llm = results[0].comparison_llm_name
 
+        llm_results_text = self._render_llm_results_text(results=results, main_llm=main_llm, comparison_llm=comparison_llm)  # type: ignore
+        evaluator_results_text = self._render_evaluator_results_text(
+            results=results, main_llm=main_llm, comparison_llm=comparison_llm  # type: ignore
+        )
+
+        return llm_results_text, evaluator_results_text
+
+    def _render_llm_results_text(self, results: list[Result], main_llm: str, comparison_llm: str) -> str:
         main_llm_preferred = sum(1 for result in results if result.result == 1)
         comparison_llm_preferred = sum(1 for result in results if result.result == 2)
         equally_good = sum(1 for result in results if result.result == 3)
@@ -275,12 +300,13 @@ class ComparisonEvaluation(BaseEvaluation):
         elif comparison_llm_preferred > main_llm_preferred:
             winner = comparison_llm  # type: ignore
         else:
-            winner = "Tie"
+            winner = "DRAW"
 
-        winner_text = f"[green]Winner overall: {winner}[/green]" if winner != "Tie" else "No overall winner, tie"
+        draw_text = "[yellow]No overall winner[/yellow]\n\n"
+        winner_text = f"[green]Winner overall: {winner}[/green]" if winner != "DRAW" else draw_text
         winner_preferred = main_llm_preferred if winner == main_llm else comparison_llm_preferred
         total_with_preference = main_llm_preferred + comparison_llm_preferred
-        if winner != "Tie":
+        if winner != "DRAW":
             winner_text += f"\n{winner} was preferred: {winner_preferred} out of {total_with_preference} "
             winner_text += f"({winner_preferred / total_with_preference:.2%})\n\n"
 
@@ -292,16 +318,56 @@ class ComparisonEvaluation(BaseEvaluation):
         llm_results_text += f"Equally good: {equally_good} ({equally_good / total:.2%})\n\n"
         llm_results_text += f"Abstained: {abstained} ({abstained / total:.2%})\n\n"
         if abstained:
-            llm_results_text += (
-                f"({main_llm} abstained: {abstained_main_llm}, {comparison_llm} abstained: {abstained_comparison_llm})\n\n"
-            )
+            llm_results_text += f"({main_llm} abstained: {abstained_main_llm}, {comparison_llm} abstained: {abstained_comparison_llm})\n\n"
 
         llm_results_text += f"Total: {total}\n"
+        return llm_results_text
 
-        # TODO: implement evaluator results
+    def _render_evaluator_results_text(self, results: list[Result], main_llm: str, comparison_llm: str) -> str:
         evaluator_results_text = ""
+        evaluators = {result.evaluator_name for result in results}
+        for evaluator in evaluators:
+            evaluator_results_text += f"[blue]{evaluator} results:[/blue]\n"
+            evaluator_results = [result for result in results if result.evaluator_name == evaluator]
+            main_llm_preferred = sum(1 for result in evaluator_results if result.result == 1)
+            comparison_llm_preferred = sum(1 for result in evaluator_results if result.result == 2)
+            equally_good = sum(1 for result in evaluator_results if result.result == 3)
+            abstained_main_llm = sum(
+                1 for result in evaluator_results if result.result == 4 and result.llm_name == main_llm
+            )
+            abstained_comparison_llm = sum(
+                1 for result in evaluator_results if result.result == 4 and result.llm_name == comparison_llm
+            )
+            abstained = abstained_main_llm + abstained_comparison_llm
+            total = len(evaluator_results)
 
-        return llm_results_text, evaluator_results_text
+            if main_llm_preferred > comparison_llm_preferred:
+                winner = main_llm
+            elif comparison_llm_preferred > main_llm_preferred:
+                winner = comparison_llm
+            else:
+                winner = "DRAW"
+
+            draw_text = "[yellow]No overall winner[/yellow]\n\n"
+            winner_text = f"[green]Winner overall: {winner}[/green]" if winner != "DRAW" else draw_text
+            winner_preferred = main_llm_preferred if winner == main_llm else comparison_llm_preferred
+            total_with_preference = main_llm_preferred + comparison_llm_preferred
+            if winner != "DRAW":
+                winner_text += f"\n{winner} was preferred: {winner_preferred} out of {total_with_preference} "
+                winner_text += f"({winner_preferred / total_with_preference:.2%})\n\n"
+
+            evaluator_results_text += winner_text
+            evaluator_results_text += f"{main_llm} preferred: {main_llm_preferred} ({main_llm_preferred / total:.2%})\n"
+            evaluator_results_text += (
+                f"{comparison_llm} preferred: {comparison_llm_preferred} ({comparison_llm_preferred / total:.2%})\n"
+            )
+            evaluator_results_text += f"Equally good: {equally_good} ({equally_good / total:.2%})\n"
+            evaluator_results_text += f"Abstained: {abstained} ({abstained / total:.2%})\n"
+            if abstained:
+                evaluator_results_text += f"({main_llm} abstained: {abstained_main_llm}, {comparison_llm} abstained: {abstained_comparison_llm})\n"
+
+            evaluator_results_text += f"Total: {total}\n\n"
+        return evaluator_results_text
 
     def _build_cli_layout(self) -> Layout:
         layout = Layout()

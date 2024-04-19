@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 from string import Template
 
@@ -12,7 +13,7 @@ from src.dtos.result import Result
 from src.evals.base import BaseEvaluation, evals_registry
 from src.llms.base import BaseLLM
 from src.logger import root_logger
-from src.utils.asyncio import run_sync
+from src.utils.asyncio import run_async_tasks
 from src.utils.cli import create_progress_bar_panel
 
 
@@ -50,6 +51,7 @@ class RatingEvaluation(BaseEvaluation):
         layout = self.build_cli_evaluation_layout()
 
         results = []
+        random.shuffle(filtered_examples)
         for idx, example in enumerate(filtered_examples):
             progress_bar = create_progress_bar_panel(n_done=idx, total=len(filtered_examples), width=console.width - 20)
             layout["progress"].update(progress_bar)
@@ -94,42 +96,41 @@ class RatingEvaluation(BaseEvaluation):
             return self.load_results(prompt_name=examples[0].prompt_name, evaluator_name=llm.name)  # type: ignore
 
         log.info(f"Evaluating {len(examples)} examples by LLM")
-        results = []
-        for example in examples:
-            log.info(f"Evaluating example {example.uuid}")
-            template_params: dict[str, str] = {
-                "input_text": example.input_text,
-                "output_text": example.output_text,
-                "question": self.question,
-                "min_value": str(self.min_value),
-                "max_value": str(self.max_value),
-            }
+        return run_async_tasks([self._evaluate_example_by_human(llm, example) for example in filtered_examples])
 
-            rating: RatingResponse = run_sync(
-                llm.generate_with_output_model,
-                template=Template(self.llm_evaluation_template),  # type: ignore
-                template_params=template_params,
-                max_output_tokens=200,
-                temperature=0.5,
-                output_model=RatingResponse,
-            )
+    async def _evaluate_example_by_human(self, llm: BaseLLM, example: Example) -> Result:
+        log.info(f"Evaluating example {example.uuid} by {llm.name}")
+        template_params: dict[str, str] = {
+            "input_text": example.input_text,
+            "output_text": example.output_text,
+            "question": self.question,
+            "min_value": str(self.min_value),
+            "max_value": str(self.max_value),
+        }
 
-            log.debug(f"Rating: {rating.rating}, Reasoning: {rating.reasoning}")
-            result = Result(
-                evaluation_name=self.name,
-                evaluation_question=self.question,
-                evaluator_name=llm.name,
-                prompt_name=example.prompt_name,  # type: ignore
-                llm_name=example.llm_name,
-                example_uuid=example.uuid,
-                result=rating.rating,
-                reasoning=rating.reasoning,
-            )
-            self.log_result(result)
-            results.append(result)
-            log.debug(f"{llm.name} rated example {example.uuid} {rating.rating}")
+        rating = await llm.generate_with_output_model(
+            template=Template(self.llm_evaluation_template),  # type: ignore
+            template_params=template_params,
+            max_output_tokens=200,
+            temperature=0.5,
+            output_model=RatingResponse,
+        )
 
-        return results
+        log.debug(f"Rating: {rating.rating}, Reasoning: {rating.reasoning}")
+        result = Result(
+            evaluation_name=self.name,
+            evaluation_question=self.question,
+            evaluator_name=llm.name,
+            prompt_name=example.prompt_name,  # type: ignore
+            llm_name=example.llm_name,
+            example_uuid=example.uuid,
+            result=rating.rating,
+            reasoning=rating.reasoning,
+        )
+
+        self.log_result(result)
+        log.debug(f"{llm.name} rated example {example.uuid} {rating.rating}")
+        return result
 
     def _display_results(self, results: list[Result]) -> None:
         llm_results_text, evaluator_results_text, worst_examples_text = self._render_results(results=results)
@@ -280,7 +281,7 @@ class RatingEvaluation(BaseEvaluation):
             Layout(name="overscan", size=1),
             Layout(name="title", size=5),
             Layout(name="results"),
-            Layout(name="worst_examples"),
+            Layout(name="worst_examples", size=10),
         )
         layout["results"].split_row(Layout(name="llm_results"), Layout(name="evaluator_results"))
         return layout

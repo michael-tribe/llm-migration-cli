@@ -8,13 +8,13 @@ It is not intended to be a comprehensive solution, but rather the simplest and f
 
 - `pip install git+https://github.com/michael-tribe/llm-migration-cli.git`
 - log examples from inside your code using `ExampleLogger`
-- run your application with the model(s) you want to compare
-- run `llm_migrate evaluate <evaluation_type> <path_to_prompts_dir>`
+- run your application with the model(s) you want to evaluate
+- run `llm_migrate evaluate <evaluation_type> <prompt_name>`
 
 
 ## Logging Examples
 
-- log examples from inside your code using `ExampleLogger`
+- log examples from inside your code using `ExampleLogger` as in the following code sample.
 ```python
 from llm_migrate import ExampleLogger
 
@@ -52,7 +52,7 @@ def process_prompt(template: str, variables: dict[str, Any], model: str) -> str:
   - filtering / subsetting examples is TODO
 - after going through all examples you will be presented with the results
   - result presentation has room for improvement
-- if you want to see the current results of an evaluation, you can run `llm_migrate results <evaluation_type> <path_to_prompts_dir>`
+- if you want to see the current results of an evaluation, you can run `llm_migrate results <evaluation_type> <prompt_name>`
 
 
 ## Usage
@@ -67,22 +67,33 @@ llm_migrate
 llm_migrate list {evals, llms, prompts}
 
 # run evaluation by human
-llm_migrate evaluate <evaluation_type> <path_to_prompts_dir>
+llm_migrate evaluate <evaluation_type> <prompt_name>
 
 # run evaluation by llm
-llm_migrate evaluate <evaluation_type> <path_to_prompts_dir> --llm <llm_model_name>
+llm_migrate evaluate <evaluation_type> <prompt_name> --llm <llm_model_name>
 
 # view results
-llm_migrate results <evaluation_type> <path_to_prompts_dir>
+llm_migrate results <evaluation_type> <prompt_name>
 ```
 
 - settings are defined in `src/settings.py` and can be overridden by environment variables in `vars.env` or `secrets.env`
+- if you want some test data to play with, set the values in the secrets file and run `./scripts/test.sh`. This will log some examples to play with.
 
 
 ## Design Goals
 
 - simple, extensible, and easy to use
-- labeling interface: currently uses a simple CLI, can be extended to a more advanced TUI or web interface for better UX
+
+
+## Improvements
+
+- filtering / subsetting examples before evaluation
+- labeling interface currently uses a simple CLI, can be extended to a more advanced TUI or web interface
+- evals are designed to have a configurable question, however there's no way to configure this yet
+- data is stored in JSONL for examples and CSV for results for simplicity, can be moved to a DB (SQLite/Postgres) for better performance
+- add cost tracking and display to LLM evaluations
+- llm_name might be renamed to model_id
+- perhaps it is more ergonomic to refer to `prompt_dir` instead of a `prompt_name` that has to be present in the configured `default_output_dir`
 
 
 ## Development

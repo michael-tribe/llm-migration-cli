@@ -15,23 +15,25 @@ cli = Typer(no_args_is_help=True)
 @cli.command("list")
 def list_command(items: str) -> None:
     if items == "evals":
-        secho("Available evaluations:", bold=True)
+        secho("\nAvailable evaluations:", bold=True)
         for evaluation in evals_registry:
             secho(f"  - {evaluation}")
 
     elif items == "llms":
-        secho("Available LLMs:", bold=True)
+        secho("\nAvailable LLMs:", bold=True)
         for llm in llm_registry:
             secho(f"  - {llm}")
 
     elif items == "prompts":
-        secho("Available prompts:", bold=True)
+        secho("\nAvailable prompts:", bold=True)
         for prompt_dir in settings.paths.default_output_dir.iterdir():
             if prompt_dir.is_dir():
                 secho(f"  - {prompt_dir.name}")
 
     else:
         secho(f"Unknown item: {items} (available: evals, llms, prompts)", fg="red")
+    
+    secho("")
 
 
 @cli.command()
